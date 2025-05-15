@@ -1,0 +1,49 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug SoFixer32",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "build SoFixer32",
+            "program": "${workspaceFolder}/build/SoFixer32.exe",
+            "args": ["-s", "base_0x7dc6ade000_size_0x5da000.so", "-o", "fix.so", "-m", "0x7dc6ade000", "-d"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "Debug SoFixer64",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "build SoFixer64",
+            "program": "${workspaceFolder}/build/SoFixer64.exe",
+            "args": ["-s", "base_0x7dc6ade000_size_0x5da000.so", "-o", "fix.so", "-m", "0x7dc6ade000", "-d"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

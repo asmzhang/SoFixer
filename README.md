@@ -5,7 +5,7 @@
 mkdir build
 cd build
 # 参数 -DSO_64=ON 用于修复64位so文件，不添加则为修复32位so文件
-cmake -DSO_64=ON ..
+cmake -G 'MinGW Makefiles' -DSO_64=ON ..
 make  
 ```
 
