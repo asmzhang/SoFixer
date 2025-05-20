@@ -2,3 +2,5 @@ cmake-*
 .idea
 res
 test
+*.so
+build

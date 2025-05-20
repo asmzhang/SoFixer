@@ -734,6 +734,30 @@ bool ElfRebuilder::RebuildFin() {
     return true;
 }
 
+std::vector<uint8_t*> search_hex_manual(uint8_t* mem, size_t mem_size, uint8_t* pattern, size_t pattern_len) {
+    std::vector<uint8_t*> ptrs;
+    uint8_t* mem_ptr = mem;
+    for (size_t i = 0; i < mem_size - pattern_len; i++) {
+        if (memcmp(mem_ptr + i, pattern, pattern_len) == 0) {
+            // return (void*)(mem_ptr + i);
+            ptrs.push_back(mem_ptr + i);
+        }
+    }
+    return ptrs;
+}
+
+void ElfRebuilder::setFix(Elf_Addr* prel,Elf_Addr value)
+{
+    Elf_Addr  prel_value = *prel;
+                
+    std::vector<uint8_t*> found = search_hex_manual(si.base, si.max_load, (uint8_t*)&prel_value, sizeof(prel_value));
+    
+    for (auto ptr : found) {
+        *(Elf_Addr*)ptr = value;
+    }
+}
+
+
 template <bool isRela>
 void ElfRebuilder::relocate(uint8_t * base, Elf_Rel* rel, Elf_Addr dump_base) {
     if(rel == nullptr) return ;
@@ -749,10 +773,12 @@ void ElfRebuilder::relocate(uint8_t * base, Elf_Rel* rel, Elf_Addr dump_base) {
         // I don't known other so info, if i want to fix it, I must dump other so file
         case R_386_RELATIVE:
         case R_ARM_RELATIVE:
+        {   
             *prel = *prel - dump_base;
             break;
-        case 0x401: //看到也有该type的重定位信息，其中也是导入表相关内容，所以这里也加上
-        case 0x402:{
+        }
+        case R_AARCH64_GLOB_DAT: //看到也有该type的重定位信息，其中也是导入表相关内容，所以这里也加上
+        case R_AARCH64_JUMP_SLOT:{
             auto syminfo = si.symtab[sym];
             if (syminfo.st_value != 0) {
                 *prel = syminfo.st_value;
@@ -765,9 +791,10 @@ void ElfRebuilder::relocate(uint8_t * base, Elf_Rel* rel, Elf_Addr dump_base) {
                 const char* symname = si.strtab + syminfo.st_name;
                 int nIndex = GetIndexOfImports(symname);
                 if (nIndex != -1){
-                  *prel = load_size + nIndex*sizeof(*prel);
+                //   *prel = load_size + nIndex*sizeof(*prel);
+                  setFix(prel, load_size + nIndex*sizeof(*prel));
                 }
-//                FLOGD("type:0x%x offset:0x%x -- symname:%s nIndex:%d\r\n", type, rel->r_offset, symname, nIndex);
+            //    FLOGD("type:0x%x offset:0x%x -- symname:%s nIndex:%d\r\n", type, rel->r_offset, symname, nIndex);
               }
             }
             break;
@@ -778,13 +805,17 @@ void ElfRebuilder::relocate(uint8_t * base, Elf_Rel* rel, Elf_Addr dump_base) {
     if (isRela){
         Elf_Rela* rela = (Elf_Rela*)rel;
         switch (type){
-            case 0x403:
+            case R_AARCH64_RELATIVE:
+            {    
                 *prel = rela->r_addend;
                 break;
+            }
             default:
                 break;
         }
     }
+    
+    
 };
 
 int ElfRebuilder::GetIndexOfImports(std::string stringSymName){
@@ -802,27 +833,50 @@ int ElfRebuilder::GetIndexOfImports(std::string stringSymName){
 
 //将导入表的符号按顺序保存在 std::vector<std::string>  mImports; 中，以便后面获得导入符号序号 
 void ElfRebuilder::SaveImportsymNames(){
-  Elf_Sym* symtab = si.symtab;
-  const char* strtab = si.strtab;
-  int nIndex = 0;
-  bool start = false;
-  while (true){
-    Elf_Sym sym = symtab[nIndex];
-    if (sym.st_name == 0 && !start){
-      nIndex++;
-      continue;
-    }
-    start = true;
-    if (sym.st_name != 0 && sym.st_value!=0){
-      //开始进到非导入表的符号，退出
-      break;
-    }
-    const char* symname = strtab + sym.st_name;
-    mImports.push_back(symname);
-//    FLOGD("NO:%d %s \r\n", nIndex, symname);
-    nIndex++;
-  }
+	Elf_Shdr shdr_dynsym ; 
+	for (int i=0;i< shdrs.size();i++){
+		if (shdrs[i].sh_type == SHT_DYNSYM){ 
+			shdr_dynsym= shdrs[i];
+		}
+	}
+	Elf_Sym* symtab = si.symtab;
+	const char* strtab = si.strtab;
+	int nIndex = 0;
+	bool start = false;
 
+    for(int i=0;i<shdr_dynsym.sh_size/24;i++)
+    {
+        Elf_Sym sym = symtab[i];
+
+        if (sym.st_shndx!=0 || (sym.st_info&0xf0)!=0x10||sym.st_value!=0){
+            continue;
+        }
+        const char* symname = strtab + sym.st_name;
+        if(*symname!=0)
+        {
+            mImports.push_back(symname);
+        }else{
+            mImports.push_back("");
+        }
+    }
+
+//   while (true){
+//     Elf_Sym sym = symtab[nIndex];
+//     if (sym.st_name == 0 && !start){
+//       nIndex++;
+//       continue;
+//     }
+//     start = true;
+//     if (sym.st_name != 0 && sym.st_value!=0){
+//       	//开始进到非导入表的符号，退出
+// 		break;
+//         continue;
+//     }
+//     const char* symname = strtab + sym.st_name;
+//     mImports.push_back(symname);
+//    	FLOGD("NO:%d %s \r\n", nIndex, symname);
+//     nIndex++;
+//   }
 }
 
 
@@ -834,30 +888,38 @@ bool ElfRebuilder::RebuildRelocs() {
     if(elf_reader_->dump_so_base_ == 0) return true;
     FLOGD("=======================RebuildRelocs=========================");
     if (si.plt_type == DT_REL) {
-        auto rel = si.rel;
+        auto rel = si.plt_rel;
         for (auto i = 0; i < si.rel_count; i++, rel++){
             relocate<false>(si.load_bias, rel, elf_reader_->dump_so_base_);
         }
-        rel = si.plt_rel;
+        rel = si.rel;
         for (auto i = 0; i < si.plt_rel_count; i++, rel++){
             relocate<false>(si.load_bias, rel, elf_reader_->dump_so_base_);
         }
     } else {
-        auto rel = (Elf_Rela*)si.plt_rela;
-        for (auto i = 0; i <si.plt_rela_count; i++, rel ++) {
+        auto rel = (Elf_Rela*)si.plt_rel;
+        for (auto i = 0; i <si.plt_rel_count; i++, rel ++) {
             relocate<true>(si.load_bias, (Elf_Rel*)rel, elf_reader_->dump_so_base_);
         }
-        rel = (Elf_Rela*) si.plt_rel;
-        for (auto i = 0; i < si.plt_rel_count; i++, rel++){
+        rel = (Elf_Rela*) si.plt_rela;
+        for (auto i = 0; i < si.plt_rela_count; i++, rel++){
             relocate<true>(si.load_bias, (Elf_Rel*)rel, elf_reader_->dump_so_base_);
         }
     }
-    auto relocate_address = [](Elf_Addr * pelf, Elf_Addr dump_base){
-        if (*pelf > dump_base)
-            *pelf = *pelf - dump_base;
-    };
-//        relocate_address(p, elf_reader_->dump_so_base_);
-//        relocate_address(p, elf_reader_->dump_so_base_);
+    // auto relocate_address = [](Elf_Addr * pelf, Elf_Addr dump_base){
+    //     if (*pelf > dump_base)
+    //         *pelf = *pelf - dump_base;
+    // };
+    //    relocate_address((Elf_Addr *)si.plt_rel, elf_reader_->dump_so_base_);
+    //    relocate_address(p, elf_reader_->dump_so_base_);
+
+    //修复sub_xxx,0x7xxxx-dump_so_base_
+    for (Elf_Addr* p=(Elf_Addr*)si.load_bias;p<(Elf_Addr*)(si.load_bias+si.max_load);p++){
+
+        if (elf_reader_->dump_so_base_<*p &&*p<elf_reader_->dump_so_base_+ si.max_load){
+            *p = *p - elf_reader_->dump_so_base_;
+        }
+    }
     FLOGD("=======================RebuildRelocs End=======================");
     return true;
 }

@@ -655,6 +655,9 @@ typedef struct
    If any adjustment is made to the ELF object after it has been
    built these entries will need to be adjusted.  */
 #define DT_ADDRRNGLO	0x6ffffe00
+#define	DT_GNU_HASH	0x6ffffef5	/* GNU-style hash table */
+#define	DT_TLSDESC_PLT	0x6ffffef6	/* loc. of PLT for tlsdesc resolver */
+#define	DT_TLSDESC_GOT	0x6ffffef7	/* loc. of GOT for tlsdesc resolver */
 #define DT_GNU_CONFLICT	0x6ffffef8	/* Start of conflict section */
 #define DT_GNU_LIBLIST	0x6ffffef9	/* Library list */
 #define DT_CONFIG	0x6ffffefa	/* Configuration information.  */
@@ -1875,6 +1878,27 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_ARM_RBASE		255
 /* Keep this the last entry.  */
 #define R_ARM_NUM		256
+
+#define	R_AARCH64_NONE		0	/* No relocation */
+#define	R_AARCH64_ABS64		257	/* Absolute offset */
+#define	R_AARCH64_ABS32		258	/* Absolute, 32-bit overflow check */
+#define	R_AARCH64_ABS16		259	/* Absolute, 16-bit overflow check */
+#define	R_AARCH64_PREL64	260	/* PC relative */
+#define	R_AARCH64_PREL32	261	/* PC relative, 32-bit overflow check */
+#define	R_AARCH64_PREL16	262	/* PC relative, 16-bit overflow check */
+#define	R_AARCH64_TSTBR14	279	/* TBZ/TBNZ immediate */
+#define	R_AARCH64_CONDBR19	280	/* Conditional branch immediate */
+#define	R_AARCH64_JUMP26	282	/* Branch immediate */
+#define	R_AARCH64_CALL26	283	/* Call immediate */
+#define	R_AARCH64_COPY		1024	/* Copy data from shared object */
+#define	R_AARCH64_GLOB_DAT	1025	/* Set GOT entry to data address */
+#define	R_AARCH64_JUMP_SLOT	1026	/* Set GOT entry to code address */
+#define	R_AARCH64_RELATIVE 	1027	/* Add load address of shared object */
+#define	R_AARCH64_TLS_DTPREL64	1028
+#define	R_AARCH64_TLS_DTPMOD64	1029
+#define	R_AARCH64_TLS_TPREL64 	1030
+#define	R_AARCH64_TLSDESC 	1031	/* Identify the TLS descriptor */
+#define	R_AARCH64_IRELATIVE	1032
 
 /* IA-64 specific declarations.  */
 

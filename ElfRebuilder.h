@@ -110,6 +110,9 @@ private:
 
   template <bool isRela>
   void relocate(uint8_t * base, Elf_Rel* rel, Elf_Addr dump_base);
+
+  void setFix(Elf_Addr* prel,Elf_Addr value);
+
     ObElfReader* elf_reader_;
     soinfo si;
 
