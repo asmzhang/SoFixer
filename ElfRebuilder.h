@@ -61,6 +61,11 @@ public:
     Elf_Rel* rel = nullptr;
     size_t rel_count = 0;
 
+    // DT_RELA / DT_RELASZ. These used to be folded into plt_rela/plt_rela_count,
+    // which made the field names lie: plt_rela held .rela.dyn, not .rela.plt.
+    Elf_Rela* rela = nullptr;
+    size_t rela_count = 0;
+
     void* preinit_array = nullptr;
     size_t preinit_array_count = 0;
 

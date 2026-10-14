@@ -150,7 +150,10 @@ bool ElfRebuilder::RebuildShdr() {
         shdrs.push_back(shdr);
     }
 
-    if (si.plt_rela != nullptr) {
+    // gen .rela.dyn  (DT_RELA / DT_RELASZ)
+    // NOTE: si.plt_rela used to live here. It now holds the PLT relocations
+    // (DT_JMPREL), so the dynamic RELA table has its own fields.
+    if (si.rela != nullptr) {
         sRELADYN = shdrs.size();
         Elf_Shdr shdr;
         shdr.sh_name = shstrtab.length();
@@ -158,9 +161,9 @@ bool ElfRebuilder::RebuildShdr() {
         shstrtab.push_back('\0');
         shdr.sh_type = SHT_RELA;
         shdr.sh_flags = SHF_ALLOC;
-        shdr.sh_addr = (uintptr_t)si.plt_rela - (uintptr_t)base;
+        shdr.sh_addr = (uintptr_t)si.rela - (uintptr_t)base;
         shdr.sh_offset = shdr.sh_addr;
-        shdr.sh_size = si.plt_rela_count * sizeof(Elf_Rela);
+        shdr.sh_size = si.rela_count * sizeof(Elf_Rela);
         shdr.sh_link = sDYNSYM;
         shdr.sh_info = 0;
 #ifdef __SO64__
@@ -172,7 +175,9 @@ bool ElfRebuilder::RebuildShdr() {
         shdrs.push_back(shdr);
     }
     // gen .rel.plt
-    if(si.plt_rel != nullptr) {
+    // A DT_RELA file keeps its PLT relocations in si.plt_rela, so either pointer
+    // being set means the section exists.
+    if(si.plt_rel != nullptr || si.plt_rela != nullptr) {
         sRELPLT = shdrs.size();
 
         Elf_Shdr shdr;
@@ -184,14 +189,16 @@ bool ElfRebuilder::RebuildShdr() {
         }
         shstrtab.push_back('\0');
 
-        shdr.sh_type = SHT_REL;
+        shdr.sh_type = (si.plt_type == DT_REL) ? SHT_REL : SHT_RELA;
         shdr.sh_flags = SHF_ALLOC;
-        shdr.sh_addr = (uintptr_t)si.plt_rel - (uintptr_t)base;
-        shdr.sh_offset = shdr.sh_addr;
         if (si.plt_type == DT_REL){
+            shdr.sh_addr = (uintptr_t)si.plt_rel - (uintptr_t)base;
+            shdr.sh_offset = shdr.sh_addr;
             shdr.sh_size = si.plt_rel_count * sizeof(Elf_Rel);
         }else {
-            shdr.sh_size = si.plt_rel_count * sizeof(Elf_Rela);
+            shdr.sh_addr = (uintptr_t)si.plt_rela - (uintptr_t)base;
+            shdr.sh_offset = shdr.sh_addr;
+            shdr.sh_size = si.plt_rela_count * sizeof(Elf_Rela);
         }
         shdr.sh_link = sDYNSYM;
         shdr.sh_info = 0;
@@ -207,7 +214,7 @@ bool ElfRebuilder::RebuildShdr() {
     }
 
     // gen.plt with .rel.plt
-    if(si.plt_rel != nullptr) {
+    if(si.plt_rel != nullptr || si.plt_rela != nullptr) {
         sPLT = shdrs.size();
 
         Elf_Shdr shdr;
@@ -220,7 +227,7 @@ bool ElfRebuilder::RebuildShdr() {
         shdr.sh_addr = shdrs[sRELPLT].sh_addr + shdrs[sRELPLT].sh_size;
         shdr.sh_offset = shdr.sh_addr;
         // TODO fix size 32bit 64bit?
-        shdr.sh_size = 20/*Pure code*/ + 12 * si.plt_rel_count;
+        shdr.sh_size = 20/*Pure code*/ + 12 * (si.plt_type == DT_REL ? si.plt_rel_count : si.plt_rela_count);
         shdr.sh_link = 0;
         shdr.sh_info = 0;
         shdr.sh_addralign = 4;
@@ -230,7 +237,7 @@ bool ElfRebuilder::RebuildShdr() {
     }
 
     // gen.text&ARM.extab
-    if(si.plt_rel != nullptr) {
+    if(si.plt_rel != nullptr || si.plt_rela != nullptr) {
         sTEXTTAB = shdrs.size();
 
         Elf_Shdr shdr;
@@ -566,6 +573,20 @@ bool ElfRebuilder::ReadSoInfo() {
 
     // Extract useful information from dynamic section.
     uint32_t needed_count = 0;
+
+    // Byte sizes are collected here and only turned into entry counts after the
+    // loop. Two reasons: DT_JMPREL / DT_PLTRELSZ can appear before DT_PLTREL, so
+    // we do not yet know whether the PLT table holds Elf_Rel or Elf_Rela; and
+    // DT_RELENT / DT_RELAENT may still be ahead of us. Dividing by
+    // sizeof(Elf_Rel) right away is what made .rela.plt come out 50% too long on
+    // every 64-bit library -- the entry size there is 24, not 16.
+    Elf_Addr jmprel_addr = 0;
+    size_t pltrelsz_bytes = 0;
+    size_t relsz_bytes = 0;
+    size_t relasz_bytes = 0;
+    size_t rel_ent = sizeof(Elf_Rel);
+    size_t rela_ent = sizeof(Elf_Rela);
+
     for (Elf_Dyn* d = si.dynamic; d->d_tag != DT_NULL; ++d) {
         switch(d->d_tag){
             case DT_HASH:
@@ -587,20 +608,20 @@ bool ElfRebuilder::ReadSoInfo() {
                 si.plt_type = d->d_un.d_val;
                 break;
             case DT_JMPREL:
-                si.plt_rel = (Elf_Rel*) (base + d->d_un.d_ptr);
+                jmprel_addr = d->d_un.d_ptr;
                 FLOGD("%s plt_rel (DT_JMPREL) found at %" ADDRESS_FORMAT "x", si.name, d->d_un.d_ptr);
                 break;
             case DT_PLTRELSZ:
-                si.plt_rel_count = d->d_un.d_val / sizeof(Elf_Rel);
-                FLOGD("%s plt_rel_count (DT_PLTRELSZ) %zu", si.name, si.plt_rel_count);
+                pltrelsz_bytes = d->d_un.d_val;
+                FLOGD("%s plt_rel_size (DT_PLTRELSZ) %zu bytes", si.name, pltrelsz_bytes);
                 break;
             case DT_REL:
                 si.rel = (Elf_Rel*) (base + d->d_un.d_ptr);
                 FLOGD("%s rel (DT_REL) found at %" ADDRESS_FORMAT "x", si.name, d->d_un.d_ptr);
                 break;
             case DT_RELSZ:
-                si.rel_count = d->d_un.d_val / sizeof(Elf_Rel);
-                FLOGD("%s rel_size (DT_RELSZ) %zu", si.name, si.rel_count);
+                relsz_bytes = d->d_un.d_val;
+                FLOGD("%s rel_size (DT_RELSZ) %zu bytes", si.name, relsz_bytes);
                 break;
             case DT_PLTGOT:
                 /* Save this in case we decide to do lazy binding. We don't yet. */
@@ -611,10 +632,12 @@ bool ElfRebuilder::ReadSoInfo() {
                 // if the dynamic table is writable
                 break;
             case DT_RELA:
-                si.plt_rela = (Elf_Rela*)(base + d->d_un.d_ptr);
+                si.rela = (Elf_Rela*)(base + d->d_un.d_ptr);
+                FLOGD("%s rela (DT_RELA) found at %" ADDRESS_FORMAT "x", si.name, d->d_un.d_ptr);
                 break;
             case DT_RELASZ:
-                si.plt_rela_count = d->d_un.d_val / sizeof(Elf_Rela);
+                relasz_bytes = d->d_un.d_val;
+                FLOGD("%s rela_size (DT_RELASZ) %zu bytes", si.name, relasz_bytes);
                 break;
             case DT_INIT:
                 si.init_func = reinterpret_cast<void*>(base + d->d_un.d_ptr);
@@ -669,7 +692,14 @@ bool ElfRebuilder::ReadSoInfo() {
                 si.strtabsize = d->d_un.d_val;
                 break;
             case DT_SYMENT:
+                break;
             case DT_RELENT:
+                rel_ent = d->d_un.d_val;
+                FLOGD("%s rel entry size (DT_RELENT) %zu", si.name, rel_ent);
+                break;
+            case DT_RELAENT:
+                rela_ent = d->d_un.d_val;
+                FLOGD("%s rela entry size (DT_RELAENT) %zu", si.name, rela_ent);
                 break;
             case DT_MIPS_RLD_MAP:
                 // Set the DT_MIPS_RLD_MAP entry to the address of _r_debug for GDB.
@@ -699,6 +729,30 @@ bool ElfRebuilder::ReadSoInfo() {
                 FLOGD("Unused DT entry: type 0x%08" ADDRESS_FORMAT "x arg 0x%08" ADDRESS_FORMAT "x", d->d_tag, d->d_un.d_val);
                 break;
         }
+    }
+    // Every entry size is known by now, so the recorded byte sizes can finally
+    // become entry counts.
+    if (rel_ent == 0) rel_ent = sizeof(Elf_Rel);
+    if (rela_ent == 0) rela_ent = sizeof(Elf_Rela);
+    si.rel_count = relsz_bytes / rel_ent;
+    si.rela_count = relasz_bytes / rela_ent;
+    if (jmprel_addr != 0) {
+        if (si.plt_type == DT_RELA) {
+            si.plt_rela = (Elf_Rela*) (base + jmprel_addr);
+            si.plt_rela_count = pltrelsz_bytes / rela_ent;
+        } else {
+            si.plt_rel = (Elf_Rel*) (base + jmprel_addr);
+            si.plt_rel_count = pltrelsz_bytes / rel_ent;
+        }
+    }
+    FLOGD("%s rel (DT_REL) %zu entries / rela (DT_RELA) %zu entries",
+          si.name, si.rel_count, si.rela_count);
+    if (si.plt_type == DT_RELA) {
+        FLOGD("%s plt relocs: DT_RELA, %zu entries of %zu B",
+              si.name, si.plt_rela_count, rela_ent);
+    } else {
+        FLOGD("%s plt relocs: DT_REL, %zu entries of %zu B",
+              si.name, si.plt_rel_count, rel_ent);
     }
     FLOGD("=======================ReadSoInfo End=========================");
     return true;
@@ -887,23 +941,32 @@ bool ElfRebuilder::RebuildRelocs() {
 
     if(elf_reader_->dump_so_base_ == 0) return true;
     FLOGD("=======================RebuildRelocs=========================");
-    if (si.plt_type == DT_REL) {
-        auto rel = si.plt_rel;
-        for (auto i = 0; i < si.rel_count; i++, rel++){
+    // Each table is walked with its own base pointer and its own count. The old
+    // code paired plt_rel with plt_rel_count and rel with rel_count, then reused
+    // plt_rel_count for a second table whose entries are a different size --
+    // which is exactly how .rela.plt came to be walked 50% too far on 64-bit
+    // files. moondrink's fix, folded in here.
+    if (si.rel != nullptr) {
+        auto rel = si.rel;
+        for (size_t i = 0; i < si.rel_count; i++, rel++) {
             relocate<false>(si.load_bias, rel, elf_reader_->dump_so_base_);
         }
-        rel = si.rel;
-        for (auto i = 0; i < si.plt_rel_count; i++, rel++){
-            relocate<false>(si.load_bias, rel, elf_reader_->dump_so_base_);
+    }
+    if (si.rela != nullptr) {
+        auto rela = si.rela;
+        for (size_t i = 0; i < si.rela_count; i++, rela++) {
+            relocate<true>(si.load_bias, (Elf_Rel*)rela, elf_reader_->dump_so_base_);
+        }
+    }
+    if (si.plt_type == DT_RELA) {
+        auto rela = si.plt_rela;
+        for (size_t i = 0; i < si.plt_rela_count; i++, rela++) {
+            relocate<true>(si.load_bias, (Elf_Rel*)rela, elf_reader_->dump_so_base_);
         }
     } else {
-        auto rel = (Elf_Rela*)si.plt_rel;
-        for (auto i = 0; i <si.plt_rel_count; i++, rel ++) {
-            relocate<true>(si.load_bias, (Elf_Rel*)rel, elf_reader_->dump_so_base_);
-        }
-        rel = (Elf_Rela*) si.plt_rela;
-        for (auto i = 0; i < si.plt_rela_count; i++, rel++){
-            relocate<true>(si.load_bias, (Elf_Rel*)rel, elf_reader_->dump_so_base_);
+        auto rel = si.plt_rel;
+        for (size_t i = 0; i < si.plt_rel_count; i++, rel++) {
+            relocate<false>(si.load_bias, rel, elf_reader_->dump_so_base_);
         }
     }
     // auto relocate_address = [](Elf_Addr * pelf, Elf_Addr dump_base){
